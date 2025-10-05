@@ -97,9 +97,9 @@ function isTokenExpired() {
 export async function fetchWebApi(endpoint, method = "GET", body) {
     const token = localStorage.getItem("spotify_access_token");
     if (!token || isTokenExpired()) {
-        sessionStorage.removeItem('spotify_code_verifier');
-        localStorage.removeItem('spotify_access_token');
-        localStorage.removeItem('spotify_token_expires_at');
+        localStorage.removeItem("spotify_access_token");
+        localStorage.removeItem("spotify_code_verifier");
+        localStorage.removeItem("spotify_token_expires_at");
         throw new Error("No valid token, re-authenticate");
     }
 
