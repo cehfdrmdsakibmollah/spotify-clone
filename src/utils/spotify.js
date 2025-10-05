@@ -1,145 +1,128 @@
-const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-const REDIRECT_URI = import.meta.env.VITE_SPOTIFY_REDIRECT_URI || window.location.origin;
-const SCOPES = "user-top-read";
-
-function randomString(len = 64) {
-    const arr = new Uint8Array(len);
-    crypto.getRandomValues(arr);
-    return Array.from(arr, b => ("00" + b.toString(16)).slice(-2)).join("");
+// src/utils/spotify.js
+const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI || window.location.origin + '/';
+const scope = "user-top-read user-library-read playlist-read-private";
+// DEBUG: show everything import.meta.env exposes (remove after debugging)
+console.info("import.meta.env keys:", Object.keys(import.meta.env || {}));
+console.info("import.meta.env (sample):", {
+    VITE_SPOTIFY_CLIENT_ID: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
+    VITE_SPOTIFY_REDIRECT_URI: import.meta.env.VITE_SPOTIFY_REDIRECT_URI
+});
+if (!clientId) {
+    console.error(
+        "VITE_SPOTIFY_CLIENT_ID is not set. Ensure .env.local exists at project root, contains VITE_SPOTIFY_CLIENT_ID and restart the dev server."
+    );
+    // do not throw here so you can inspect import.meta.env in the console;
+    // initAuth will still fail later if clientId is missing.
 }
 
-async function sha256(text) {
-    const data = new TextEncoder().encode(text);
-    const hash = await crypto.subtle.digest("SHA-256", data);
-    return new Uint8Array(hash);
-}
-
-function base64UrlEncode(bytes) {
-    let s = btoa(String.fromCharCode(...bytes));
-    return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function createCodeChallenge(verifier) {
-    const hashed = await sha256(verifier);
-    return base64UrlEncode(hashed);
-}
-
-export async function redirectToAuth() {
-    if (!CLIENT_ID) throw new Error("VITE_SPOTIFY_CLIENT_ID not set");
-    const verifier = randomString(64);
-    const challenge = await createCodeChallenge(verifier);
-    sessionStorage.setItem("spotify_code_verifier", verifier);
-    const state = randomString(16);
-    const params = new URLSearchParams({
-        response_type: "code",
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        redirect_uri: REDIRECT_URI,
-        state,
-        code_challenge_method: "S256",
-        code_challenge: challenge
-    });
-    window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
-}
-
-async function exchangeCodeForToken(code, code_verifier) {
-    const body = new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: REDIRECT_URI,
-        client_id: CLIENT_ID,
-        code_verifier
-    });
-    const res = await fetch("https://accounts.spotify.com/api/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString()
-    });
-    if (!res.ok) throw new Error("Token exchange failed");
-    const data = await res.json();
-    const expiry = Date.now() + (data.expires_in || 3600) * 1000;
-    sessionStorage.setItem("spotify_token", JSON.stringify({ ...data, expiry }));
-    return data;
-}
-
-async function refreshToken(refresh_token) {
-    const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token,
-        client_id: CLIENT_ID
-    });
-    const res = await fetch("https://accounts.spotify.com/api/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString()
-    });
-    if (!res.ok) throw new Error("Refresh token failed");
-    const data = await res.json();
-    const stored = JSON.parse(sessionStorage.getItem("spotify_token") || "{}");
-    const expiry = Date.now() + (data.expires_in || 3600) * 1000;
-    const merged = { ...stored, ...data, expiry };
-    sessionStorage.setItem("spotify_token", JSON.stringify(merged));
-    return merged;
-}
-
-export async function handleRedirectCallback() {
-    const url = new URL(window.location.href);
-    const code = url.searchParams.get("code");
-    if (!code) return null;
-    const verifier = sessionStorage.getItem("spotify_code_verifier");
-    if (!verifier) throw new Error("Missing code verifier");
-    const tokenData = await exchangeCodeForToken(code, verifier);
-    url.searchParams.delete("code");
-    url.searchParams.delete("state");
-    window.history.replaceState({}, "", url.pathname + url.search);
-    return tokenData;
-}
-
-function getStoredToken() {
-    const raw = sessionStorage.getItem("spotify_token");
-    if (!raw) return null;
-    try { return JSON.parse(raw); } catch { return null; }
-}
-
-export async function getAccessToken() {
-    const t = getStoredToken();
-    if (!t) return null;
-    if (t.expiry && Date.now() > t.expiry - 60000) {
-        if (t.refresh_token) {
-            const refreshed = await refreshToken(t.refresh_token);
-            return refreshed.access_token;
-        }
-        return null;
+function generateRandomString(length = 128) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let result = "";
+    for (let i = 0; i < length; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    return t.access_token;
+    return result;
+}
+
+async function generateCodeChallenge(verifier) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return btoa(String.fromCharCode(...new Uint8Array(digest)))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
 }
 
 export async function initAuth() {
-    await handleRedirectCallback().catch(() => { });
-    const token = await getAccessToken();
-    if (!token) await redirectToAuth();
-    return token;
-}
+    const stored = localStorage.getItem("spotify_access_token");
+    if (stored) {
+        return stored;
+    }
 
-export async function fetchWebApi(endpoint, method = "GET", body = null) {
-    const token = await getAccessToken();
-    if (!token) throw new Error("No Spotify token, call initAuth() first");
-    const res = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
-        method,
-        headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": body ? "application/json" : undefined
-        },
-        body: body ? JSON.stringify(body) : undefined
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+
+    if (!code) {
+        // start auth
+        const verifier = generateRandomString(128);
+        const challenge = await generateCodeChallenge(verifier);
+        localStorage.setItem("spotify_code_verifier", verifier);
+
+        const authUrl = new URL("https://accounts.spotify.com/authorize");
+        authUrl.searchParams.append("client_id", clientId);
+        authUrl.searchParams.append("response_type", "code");
+        authUrl.searchParams.append("redirect_uri", redirectUri);
+        authUrl.searchParams.append("scope", scope);
+        authUrl.searchParams.append("code_challenge_method", "S256");
+        authUrl.searchParams.append("code_challenge", challenge);
+
+        window.location.href = authUrl.toString();
+        return;
+    }
+
+    const verifier = localStorage.getItem("spotify_code_verifier");
+    const body = new URLSearchParams({
+        client_id: clientId,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+    });
+
+    const res = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
     });
     if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || "Spotify API error");
+        throw new Error("Token exchange failed");
+    }
+    const data = await res.json();
+    localStorage.setItem("spotify_access_token", data.access_token);
+    if (data.expires_in) {
+        const expiry = Date.now() + data.expires_in * 1000;
+        localStorage.setItem("spotify_token_expires_at", expiry.toString());
+    }
+    window.history.replaceState({}, document.title, "/");
+    return data.access_token;
+}
+
+function isTokenExpired() {
+    const exp = localStorage.getItem("spotify_token_expires_at");
+    if (!exp) return true;
+    return Date.now() > Number(exp);
+}
+
+export async function fetchWebApi(endpoint, method = "GET", body) {
+    const token = localStorage.getItem("spotify_access_token");
+    if (!token || isTokenExpired()) {
+        localStorage.removeItem("spotify_access_token");
+        localStorage.removeItem("spotify_code_verifier");
+        localStorage.removeItem("spotify_token_expires_at");
+        throw new Error("No valid token, re-authenticate");
+    }
+
+    const headers = { Authorization: `Bearer ${token}` };
+    if (body && method !== "GET") {
+        headers["Content-Type"] = "application/json";
+    }
+
+    const res = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
+        method,
+        headers,
+        body: body && method !== "GET" ? JSON.stringify(body) : undefined,
+    });
+
+    if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Spotify API error ${res.status}: ${txt}`);
     }
     return res.json();
 }
 
-export async function getTopTracks({ time_range = "long_term", limit = 5 } = {}) {
-    const data = await fetchWebApi(`me/top/tracks?time_range=${time_range}&limit=${limit}`);
+export async function getTopTracks({ limit = 5 } = {}) {
+    const data = await fetchWebApi(`me/top/tracks?limit=${limit}`, "GET");
     return data.items || [];
 }
