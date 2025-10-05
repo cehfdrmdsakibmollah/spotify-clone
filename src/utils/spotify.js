@@ -1,19 +1,18 @@
 // src/utils/spotify.js
-const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI || window.location.origin + '/';
+const clientId =
+    import.meta.env?.VITE_SPOTIFY_CLIENT_ID ||
+    (window.__ENV && window.__ENV.VITE_SPOTIFY_CLIENT_ID) ||
+    null;
+const redirectUri =
+    import.meta.env?.VITE_SPOTIFY_REDIRECT_URI ||
+    (window.__ENV && window.__ENV.VITE_SPOTIFY_REDIRECT_URI) ||
+    window.location.origin + '/';
 const scope = "user-top-read user-library-read playlist-read-private";
-// DEBUG: show everything import.meta.env exposes (remove after debugging)
-console.info("import.meta.env keys:", Object.keys(import.meta.env || {}));
-console.info("import.meta.env (sample):", {
-    VITE_SPOTIFY_CLIENT_ID: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-    VITE_SPOTIFY_REDIRECT_URI: import.meta.env.VITE_SPOTIFY_REDIRECT_URI
-});
+console.info("env keys (build):", Object.keys(import.meta.env || {}));
+console.info("runtime window.__ENV present:", !!window.__ENV);
+console.info("effective CLIENT_ID:", clientId, "REDIRECT_URI:", redirectUri);
 if (!clientId) {
-    console.error(
-        "VITE_SPOTIFY_CLIENT_ID is not set. Ensure .env.local exists at project root, contains VITE_SPOTIFY_CLIENT_ID and restart the dev server."
-    );
-    // do not throw here so you can inspect import.meta.env in the console;
-    // initAuth will still fail later if clientId is missing.
+    console.error("VITE_SPOTIFY_CLIENT_ID missing — set .env.local (dev) or Netlify env var and rebuild, or use public/env.js for runtime injection.");
 }
 
 function generateRandomString(length = 128) {
@@ -98,9 +97,9 @@ function isTokenExpired() {
 export async function fetchWebApi(endpoint, method = "GET", body) {
     const token = localStorage.getItem("spotify_access_token");
     if (!token || isTokenExpired()) {
-        localStorage.removeItem("spotify_access_token");
-        localStorage.removeItem("spotify_code_verifier");
-        localStorage.removeItem("spotify_token_expires_at");
+        sessionStorage.removeItem('spotify_code_verifier');
+        localStorage.removeItem('spotify_access_token');
+        localStorage.removeItem('spotify_token_expires_at');
         throw new Error("No valid token, re-authenticate");
     }
 
