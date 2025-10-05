@@ -14,6 +14,10 @@ export default function App() {
     await initAuth();
   };
 
+
+
+  
+
   if (!token) {
     return (
       <div className="flex items-center justify-center h-screen bg-black text-white">
